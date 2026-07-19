@@ -11,8 +11,10 @@ from prefect import flow, task
 from prefect.logging import get_run_logger
 
 try:
+    # Use the script location when running as a .py file
     BASE_DIR = Path(__file__).resolve().parent
 except NameError:
+    # Fallback for notebook environments where __file__ is not defined
     BASE_DIR = Path.cwd()
 
 PROJECT_ROOT = BASE_DIR.parent
@@ -59,6 +61,8 @@ def transform_customers(customers_df: pd.DataFrame) -> pd.DataFrame:
         ).dt.date
 
         before_dedup = len(customers_df)
+        
+        # Keep the most recent record for each customer_id based on signup_date
         customers_df = customers_df.sort_values(
             by=["customer_id", "signup_date"],
             ascending=[True, False]
@@ -72,6 +76,7 @@ def transform_customers(customers_df: pd.DataFrame) -> pd.DataFrame:
             f"Customer dedup complete: removed {before_dedup - after_dedup} duplicate rows"
         )
 
+        # Normalize phone numbers by removing non-digit characters
         phone_mask = customers_df["phone"].notna()
         customers_df.loc[phone_mask, "phone"] = (
             customers_df.loc[phone_mask, "phone"]
@@ -80,6 +85,7 @@ def transform_customers(customers_df: pd.DataFrame) -> pd.DataFrame:
         )
         customers_df["phone"] = customers_df["phone"].replace("", pd.NA)
 
+        # Fill missing emails with unknown@domain.com
         missing_email_count = customers_df["email"].isna().sum()
         customers_df["email"] = customers_df["email"].fillna("unknown@domain.com")
         logger.info(f"Filled {missing_email_count} missing email values")
@@ -101,7 +107,8 @@ def transform_orders(
     try:
         orders_df = orders_df.copy()
         exchange_rates_df = exchange_rates_df.copy()
-
+       
+        # Exclude invalid orders with non-positive amounts
         before_filter = len(orders_df)
         orders_df = orders_df[orders_df["total_amount"] > 0].copy()
         after_filter = len(orders_df)
@@ -116,6 +123,7 @@ def transform_orders(
             exchange_rates_df["date"], errors="coerce"
         ).dt.date
 
+        # Join orders to exchange rates by currency and order date
         orders_with_fx = orders_df.merge(
             exchange_rates_df,
             left_on=["currency", "order_date"],
@@ -126,6 +134,8 @@ def transform_orders(
 
         missing_currency_count = orders_with_fx["currency"].isna().sum()
         orders_with_fx["currency"] = orders_with_fx["currency"].fillna("USD")
+        
+        # Treat missing currency as USD and default missing exchange rates to 1.0
         orders_with_fx.loc[
             orders_with_fx["currency"] == "USD", "rate_to_usd"
         ] = 1.0
@@ -137,16 +147,19 @@ def transform_orders(
             f"Applied USD defaults for {missing_currency_count} missing currencies and {missing_rate_count} missing rates"
         )
 
+        # Convert all valid order amounts into USD
         orders_with_fx["usd_amount"] = (
             orders_with_fx["total_amount"] * orders_with_fx["rate_to_usd"]
         )
 
+        # Drop raw currency/rate columns after deriving usd_amount
         orders_with_fx.drop(
             ["rate_to_usd", "date", "currency", "total_amount"],
             axis=1,
             inplace=True,
         )
 
+        # Place usd_amount after order_date for readability
         cols = list(orders_with_fx.columns)
         cols.remove("usd_amount")
         target_idx = cols.index("order_date") + 1
@@ -210,6 +223,7 @@ def load_to_csv(
 
     except Exception:
         logger.exception("CSV fallback export failed")
+        # Re-raise so the task is marked as failed instead of silently continuing
         raise
 
 @flow(name="etl-pipeline")
@@ -229,6 +243,7 @@ def etl_pipeline(db_path: str = str(DB_PATH)) -> None:
         try:
             load_to_sqlite(customers_df, orders_df)
         except Exception:
+            # Fallback to CSV export if the primary SQLite load fails
             logger.exception("Primary SQLite load failed; attempting CSV fallback")
             load_to_csv(customers_df, orders_df)
 
