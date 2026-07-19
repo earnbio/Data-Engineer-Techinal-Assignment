@@ -3,7 +3,7 @@
 
 ## Overview
 
-This project implements an ETL pipeline in Python using Prefect for orchestration, SQLite as the source and target database, pandas for transformations, and pytest for unit testing.[web:586][web:587]
+This project implements an ETL pipeline in Python using Prefect for orchestration, SQLite as the source and target database, pandas for transformations, and pytest for unit testing.
 
 The pipeline extracts raw customer, order, and exchange rate data from `shopdata.db`, applies cleaning and enrichment rules, loads analytics-ready tables into SQLite, and falls back to CSV export if the database load fails.
 
